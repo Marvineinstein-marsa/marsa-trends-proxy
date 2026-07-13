@@ -10,11 +10,11 @@ const ALLOWED_ORIGINS = [
 type Category = 'treatments' | 'innovations' | 'crops' | 'outbreaks' | 'prices';
 
 const prompts: Record<Category, string> = {
-  treatments: `What are the latest poultry disease treatments in 2025 for East Africa, especially Uganda? Include medicine names, what they treat, where to buy in Uganda, and price ranges.`,
-  innovations: `What are the most innovative farming techniques for high yield crops in 2025? Focus on methods applicable to the Ugandan climate.`,
-  crops: `What are the best ways to increase maize, tomato, and bean yield in Uganda in 2025? Provide specific, actionable production tips.`,
-  outbreaks: `Are there any animal disease outbreaks in East Africa in 2025? Check for Newcastle disease, Foot and Mouth, or Swine Fever alerts in Uganda.`,
-  prices: `What are the current prices for eggs, chicken, and maize in Uganda in 2025? Provide a market trend summary.`,
+  treatments: `What are the latest poultry disease treatments in 2026 for East Africa, especially Uganda? Include medicine names, what they treat, where to buy in Uganda, and price ranges.`,
+  innovations: `What are the most innovative farming techniques for high yield crops in 2026? Focus on methods applicable to the Ugandan climate.`,
+  crops: `What are the best ways to increase maize, tomato, and bean yield in Uganda in 2026? Provide specific, actionable production tips.`,
+  outbreaks: `Are there any animal disease outbreaks in East Africa in 2026? Check for Newcastle disease, Foot and Mouth, or Swine Fever alerts in Uganda.`,
+  prices: `What are the current prices for eggs, chicken, and maize in Uganda in 2026? Provide a market trend summary.`,
 };
 
 const systemInstruction = `You are Dr. MARSA Trends AI. Your goal is to provide Ugandan farmers with the most current, actionable farming data.
@@ -82,4 +82,4 @@ export async function POST(req: NextRequest) {
     console.error('Proxy error:', e);
     return NextResponse.json({ error: 'Internal error' }, { status: 500, headers });
   }
-    }
+}
