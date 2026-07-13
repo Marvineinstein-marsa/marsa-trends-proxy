@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const GEMINI_API_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+
 const ALLOWED_ORIGINS = [
   'https://studio-wheat-tau.vercel.app',
   'https://studio-git-main-marvineinstein-marsas-projects.vercel.app',
@@ -13,8 +13,8 @@ const prompts: Record<Category, string> = {
   treatments: `What are the latest poultry disease treatments in 2026 for East Africa, especially Uganda? Include medicine names, what they treat, where to buy in Uganda, and price ranges.`,
   innovations: `What are the most innovative farming techniques for high yield crops in 2026? Focus on methods applicable to the Ugandan climate.`,
   crops: `What are the best ways to increase maize, tomato, and bean yield in Uganda in 2026? Provide specific, actionable production tips.`,
-  outbreaks: `Are there any animal disease outbreaks in East Africa in 2026? Check for Newcastle disease, Foot and Mouth, or Swine Fever alerts in Uganda.`,
-  prices: `What are the current prices for eggs, chicken, and maize in Uganda in 2026? Provide a market trend summary.`,
+  outbreaks: `Are there any animal disease outbreaks in East Africa right now? Search for current Newcastle disease, Foot and Mouth, or Swine Fever alerts in Uganda.`,
+  prices: `What are the current prices for eggs, chicken, and maize in Uganda today? Search for the latest market data and provide a summary.`,
 };
 
 const systemInstruction = `You are Dr. MARSA Trends AI. Your goal is to provide Ugandan farmers with the most current, actionable farming data.
@@ -46,32 +46,37 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid category' }, { status: 400, headers });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) {
       return NextResponse.json({ error: 'Server misconfigured' }, { status: 500, headers });
     }
 
-    const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+    const response = await fetch(GROQ_API_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
       body: JSON.stringify({
-        system_instruction: { parts: [{ text: systemInstruction }] },
-        contents: [{ parts: [{ text: prompts[category as Category] }] }],
-        tools: [{ google_search: {} }],
+        model: 'groq/compound',
+        messages: [
+          { role: 'system', content: systemInstruction },
+          { role: 'user', content: prompts[category as Category] },
+        ],
       }),
     });
 
     if (!response.ok) {
       const errorBody = await response.text();
-      console.error(`Gemini API error ${response.status}:`, errorBody);
-      return NextResponse.json({ error: `Gemini error: ${response.status}` }, { status: 502, headers });
+      console.error(`Groq API error ${response.status}:`, errorBody);
+      return NextResponse.json({ error: `Groq error: ${response.status}` }, { status: 502, headers });
     }
 
     const data = await response.json();
-    const content = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const content = data?.choices?.[0]?.message?.content || '';
 
     if (!content) {
-      return NextResponse.json({ error: 'Empty response from Gemini' }, { status: 502, headers });
+      return NextResponse.json({ error: 'Empty response from Groq' }, { status: 502, headers });
     }
 
     return NextResponse.json(
@@ -82,4 +87,4 @@ export async function POST(req: NextRequest) {
     console.error('Proxy error:', e);
     return NextResponse.json({ error: 'Internal error' }, { status: 500, headers });
   }
-}
+        }
