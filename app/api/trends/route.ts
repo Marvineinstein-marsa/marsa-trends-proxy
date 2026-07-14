@@ -17,6 +17,19 @@ const prompts: Record<Category, string> = {
   prices: `What are the current prices for eggs, chicken, and maize in Uganda today? Search for the latest market data and provide a summary.`,
 };
 
+const imagePrompts: Record<Category, string> = {
+  treatments: 'poultry veterinary medicine treatment bottles, farm clinic, realistic photo',
+  innovations: 'modern smart farming technology, drone over crops, greenhouse, realistic photo',
+  crops: 'healthy maize and tomato farm field in Uganda, lush green crops, realistic photo',
+  outbreaks: 'veterinarian examining sick chicken, disease alert, farm biosecurity, realistic photo',
+  prices: 'African market stall with eggs chicken and maize, vendors, realistic photo',
+};
+
+function getImageUrl(category: Category): string {
+  const prompt = encodeURIComponent(imagePrompts[category]);
+  return `https://image.pollinations.ai/prompt/${prompt}?width=800&height=450&nologo=true`;
+}
+
 const systemInstruction = `You are Dr. MARSA Trends AI. Your goal is to provide Ugandan farmers with the most current, actionable farming data.
 Structure your response using Markdown with clear headings and bullet points.
 If you find price data, format it as a simple table.
@@ -29,6 +42,15 @@ function corsHeaders(origin: string | null) {
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
   };
+}
+
+async function fetchWithRetry(url: string, options: RequestInit, retries = 2): Promise<Response> {
+  for (let i = 0; i <= retries; i++) {
+    const res = await fetch(url, options);
+    if (res.status !== 429) return res;
+    await new Promise((r) => setTimeout(r, 1000 * (i + 1))); // wait 1s, then 2s
+  }
+  return fetch(url, options); // final attempt, return whatever happens
 }
 
 export async function OPTIONS(req: NextRequest) {
@@ -51,7 +73,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Server misconfigured' }, { status: 500, headers });
     }
 
-    const response = await fetch(GROQ_API_URL, {
+    const response = await fetchWithRetry(GROQ_API_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -63,6 +85,7 @@ export async function POST(req: NextRequest) {
           { role: 'system', content: systemInstruction },
           { role: 'user', content: prompts[category as Category] },
         ],
+        search_settings: { max_results: 3 },
       }),
     });
 
@@ -80,11 +103,16 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json(
-      { content, category, timestamp: new Date().toLocaleTimeString() },
+      {
+        content,
+        category,
+        imageUrl: getImageUrl(category as Category),
+        timestamp: new Date().toLocaleTimeString(),
+      },
       { headers }
     );
   } catch (e) {
     console.error('Proxy error:', e);
     return NextResponse.json({ error: 'Internal error' }, { status: 500, headers });
   }
-        }
+    }
