@@ -20,6 +20,14 @@ const searchQueries: Record<Category, string> = {
   prices: 'egg chicken maize prices Uganda today market',
 };
 
+const recencyDays: Record<Category, number> = {
+  prices: 3,        // prices change fast, only want very recent data
+  outbreaks: 14,    // disease alerts should be fairly recent
+  treatments: 60,   // medicine info doesn't change often
+  crops: 90,        // seasonal tips, slower-changing
+  innovations: 90,  // tech trends, slower-changing
+};
+
 const prompts: Record<Category, string> = {
   treatments: `What are the latest poultry disease treatments in 2026 for East Africa, especially Uganda? Include medicine names, what they treat, where to buy in Uganda, and price ranges.`,
   innovations: `What are the most innovative farming techniques for high yield crops in 2026? Focus on methods applicable to the Ugandan climate.`,
@@ -75,13 +83,15 @@ async function getTavilyContext(category: Category, tavilyKey: string): Promise<
       search_depth: 'basic',
       max_results: 5,
       include_answer: false,
+      topic: 'news',
+      days: recencyDays[category],
     }),
   });
 
   if (!res.ok) {
     const body = await res.text();
     console.error(`Tavily API error ${res.status}:`, body);
-    return ''; // fall back to empty context rather than failing the whole request
+    return '';
   }
 
   const data = await res.json();
@@ -161,4 +171,4 @@ export async function POST(req: NextRequest) {
     console.error('Proxy error:', e);
     return NextResponse.json({ error: 'Internal error' }, { status: 500, headers });
   }
-    }
+}
