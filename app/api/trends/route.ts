@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+export const maxDuration = 60; // allow up to 60s for Groq's compound web search to complete
+
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 const ALLOWED_ORIGINS = [
@@ -115,4 +117,4 @@ export async function POST(req: NextRequest) {
     console.error('Proxy error:', e);
     return NextResponse.json({ error: 'Internal error' }, { status: 500, headers });
   }
-    }
+                                    }
