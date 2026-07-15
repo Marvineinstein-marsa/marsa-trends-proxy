@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const maxDuration = 60; // allow up to 60s for Groq's compound web search to complete
+export const maxDuration = 60;
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const TAVILY_API_URL = 'https://api.tavily.com/search';
 
 const ALLOWED_ORIGINS = [
   'https://studio-wheat-tau.vercel.app',
@@ -10,6 +11,14 @@ const ALLOWED_ORIGINS = [
 ];
 
 type Category = 'treatments' | 'innovations' | 'crops' | 'outbreaks' | 'prices';
+
+const searchQueries: Record<Category, string> = {
+  treatments: 'latest poultry disease treatments Uganda 2026 medicine prices',
+  innovations: 'innovative farming technology techniques Uganda 2026',
+  crops: 'maize tomato bean yield tips Uganda 2026',
+  outbreaks: 'Newcastle disease foot and mouth swine fever outbreak Uganda East Africa',
+  prices: 'egg chicken maize prices Uganda today market',
+};
 
 const prompts: Record<Category, string> = {
   treatments: `What are the latest poultry disease treatments in 2026 for East Africa, especially Uganda? Include medicine names, what they treat, where to buy in Uganda, and price ranges.`,
@@ -32,10 +41,11 @@ function getImageUrl(category: Category): string {
   return `https://image.pollinations.ai/prompt/${prompt}?width=800&height=450&nologo=true`;
 }
 
-const systemInstruction = `You are Dr. MARSA Trends AI. Your goal is to provide Ugandan farmers with the most current, actionable farming data.
+const systemInstruction = `You are Dr. MARSA Trends AI. Your goal is to provide Ugandan farmers with the most current, actionable farming data based on the search results provided to you.
 Structure your response using Markdown with clear headings and bullet points.
 If you find price data, format it as a simple table.
-If you find an outbreak, start with a "⚠️ ALERT" header.`;
+If you find an outbreak, start with a "⚠️ ALERT" header.
+Base your answer only on the search results given. If the results don't cover something, say so briefly rather than guessing.`;
 
 function corsHeaders(origin: string | null) {
   const allowed = origin && ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
@@ -50,9 +60,36 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 2): P
   for (let i = 0; i <= retries; i++) {
     const res = await fetch(url, options);
     if (res.status !== 429) return res;
-    await new Promise((r) => setTimeout(r, 1000 * (i + 1))); // wait 1s, then 2s
+    await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
   }
-  return fetch(url, options); // final attempt, return whatever happens
+  return fetch(url, options);
+}
+
+async function getTavilyContext(category: Category, tavilyKey: string): Promise<string> {
+  const res = await fetch(TAVILY_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      api_key: tavilyKey,
+      query: searchQueries[category],
+      search_depth: 'basic',
+      max_results: 5,
+      include_answer: false,
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    console.error(`Tavily API error ${res.status}:`, body);
+    return ''; // fall back to empty context rather than failing the whole request
+  }
+
+  const data = await res.json();
+  const results = data?.results || [];
+
+  return results
+    .map((r: any, i: number) => `Source ${i + 1} (${r.url}): ${r.title}\n${r.content}`)
+    .join('\n\n');
 }
 
 export async function OPTIONS(req: NextRequest) {
@@ -70,24 +107,31 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid category' }, { status: 400, headers });
     }
 
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) {
+    const groqKey = process.env.GROQ_API_KEY;
+    const tavilyKey = process.env.TAVILY_API_KEY;
+
+    if (!groqKey || !tavilyKey) {
       return NextResponse.json({ error: 'Server misconfigured' }, { status: 500, headers });
     }
+
+    const searchContext = await getTavilyContext(category as Category, tavilyKey);
+
+    const userPrompt = searchContext
+      ? `${prompts[category as Category]}\n\nHere are current search results to base your answer on:\n\n${searchContext}`
+      : prompts[category as Category];
 
     const response = await fetchWithRetry(GROQ_API_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${groqKey}`,
       },
       body: JSON.stringify({
-        model: 'groq/compound',
+        model: 'llama-3.3-70b-versatile',
         messages: [
           { role: 'system', content: systemInstruction },
-          { role: 'user', content: prompts[category as Category] },
+          { role: 'user', content: userPrompt },
         ],
-        search_settings: { max_results: 3 },
       }),
     });
 
@@ -117,4 +161,4 @@ export async function POST(req: NextRequest) {
     console.error('Proxy error:', e);
     return NextResponse.json({ error: 'Internal error' }, { status: 500, headers });
   }
-                                    }
+    }
