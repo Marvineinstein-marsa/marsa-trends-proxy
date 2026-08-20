@@ -70,4 +70,4 @@ export async function POST(req: NextRequest) {
     console.error('Push notification send failed:', err);
     return NextResponse.json({ success: false, error: err?.message || 'Unknown error' }, { status: 500, headers });
   }
-    }
+}
