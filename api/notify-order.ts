@@ -54,7 +54,7 @@ export default async function handler(req: any, res: any) {
     const sellerId = String(order.get('sellerId') || '');
     if (!sellerId) return res.status(200).json({ ok: true, skipped: 'no seller' });
 
-    // 4. Find the seller's tokens: new private place first, old public place as a fallback.
+    // 4. Find the seller's tokens: private place first, old public place as a fallback.
     const userRef = db.collection('users').doc(sellerId);
     const profileRef = db.collection('public_profiles').doc(sellerId);
     const [userSnap, profileSnap] = await Promise.all([userRef.get(), profileRef.get()]);
@@ -74,21 +74,23 @@ export default async function handler(req: any, res: any) {
     const product = clip(order.get('productName'), 60);
     const bodyText = qty && product ? `${buyer} ordered ${qty} ${unit} of ${product}`.replace('  ', ' ') : `${buyer} placed an order`;
 
-    const appUrl = (process.env.APP_URL || '').replace(/\/$/, '');
     const ordersPath = process.env.ORDERS_PATH || '/seller/orders';
-    const icon = appUrl && process.env.PUSH_ICON_PATH ? `${appUrl}${process.env.PUSH_ICON_PATH}` : undefined;
-    const badge = appUrl && process.env.PUSH_BADGE_PATH ? `${appUrl}${process.env.PUSH_BADGE_PATH}` : undefined;
+    const iconPath = process.env.PUSH_ICON_PATH || '/icon-192.png';
 
+    // Data-only message: the service worker shows it with the Smart Kuku name, icon and tap target.
     const all = [...tokens];
     const result = await getMessaging().sendEachForMulticast({
       tokens: all,
-      notification: { title: 'New Order Received', body: bodyText },
-      data: { type: 'new_order', orderId, url: ordersPath },
-      webpush: {
-        headers: { Urgency: 'high' },
-        notification: { ...(icon ? { icon } : {}), ...(badge ? { badge } : {}), tag: `order-${orderId}` },
-        ...(appUrl ? { fcmOptions: { link: `${appUrl}${ordersPath}` } } : {}),
+      data: {
+        type: 'new_order',
+        orderId,
+        title: 'New Order Received',
+        body: bodyText,
+        url: ordersPath,
+        icon: iconPath,
+        tag: `order-${orderId}`,
       },
+      webpush: { headers: { Urgency: 'high', TTL: '86400' } },
       android: { priority: 'high' },
     });
 
