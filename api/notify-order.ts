@@ -8,11 +8,13 @@ import { getMessaging } from 'firebase-admin/messaging';
 
 function init() {
   if (!getApps().length) {
-    const raw = process.env.FIREBASE_SERVICE_ACCOUNT; // <-- change the name if your proxy uses a different variable
-    if (!raw) throw new Error('FIREBASE_SERVICE_ACCOUNT is not set');
-    const sa = JSON.parse(raw);
-    if (sa.private_key) sa.private_key = String(sa.private_key).replace(/\\n/g, '\n');
-    initializeApp({ credential: cert(sa) });
+    const projectId = process.env.FIREBASE_PROJECT_ID;
+    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+    const privateKey = (process.env.FIREBASE_PRIVATE_KEY || '')
+      .replace(/^"|"$/g, '')
+      .replace(/\\n/g, '\n');
+    if (!projectId || !clientEmail || !privateKey) throw new Error('Firebase server credentials are not set');
+    initializeApp({ credential: cert({ projectId, clientEmail, privateKey }) });
   }
 }
 
@@ -74,8 +76,8 @@ export default async function handler(req: any, res: any) {
 
     const appUrl = (process.env.APP_URL || '').replace(/\/$/, '');
     const ordersPath = process.env.ORDERS_PATH || '/seller/orders';
-    const icon = appUrl ? `${appUrl}${process.env.PUSH_ICON_PATH || '/icon-192.png'}` : undefined;
-    const badge = appUrl ? `${appUrl}${process.env.PUSH_BADGE_PATH || '/badge-96.png'}` : undefined;
+    const icon = appUrl && process.env.PUSH_ICON_PATH ? `${appUrl}${process.env.PUSH_ICON_PATH}` : undefined;
+    const badge = appUrl && process.env.PUSH_BADGE_PATH ? `${appUrl}${process.env.PUSH_BADGE_PATH}` : undefined;
 
     const all = [...tokens];
     const result = await getMessaging().sendEachForMulticast({
