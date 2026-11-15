@@ -1,10 +1,10 @@
 // Smart Kuku: secure push to a seller when a buyer places an order.
 // The buyer's app sends only the order id + their login token.
 
-import { initializeApp, getApps, cert } from 'firebase-admin/app';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { getAuth } from 'firebase-admin/auth';
-import { getMessaging } from 'firebase-admin/messaging';
+const { initializeApp, getApps, cert } = require('firebase-admin/app');
+const { getFirestore, FieldValue } = require('firebase-admin/firestore');
+const { getAuth } = require('firebase-admin/auth');
+const { getMessaging } = require('firebase-admin/messaging');
 
 function init() {
   if (!getApps().length) {
@@ -18,9 +18,9 @@ function init() {
   }
 }
 
-const clip = (v: unknown, n: number) => String(v ?? '').slice(0, n);
+const clip = (v, n) => String(v == null ? '' : v).slice(0, n);
 
-export default async function handler(req: any, res: any) {
+module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', process.env.ALLOWED_ORIGIN || '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -36,8 +36,8 @@ export default async function handler(req: any, res: any) {
     const decoded = await getAuth().verifyIdToken(bearer.slice(7));
 
     let body = req.body;
-    if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
-    const orderId = String(body?.orderId || '');
+    if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = {}; } }
+    const orderId = String((body && body.orderId) || '');
     if (!/^[A-Za-z0-9_-]{6,60}$/.test(orderId)) return res.status(400).json({ error: 'Bad order id' });
 
     const db = getFirestore();
@@ -59,8 +59,8 @@ export default async function handler(req: any, res: any) {
     const profileRef = db.collection('public_profiles').doc(sellerId);
     const [userSnap, profileSnap] = await Promise.all([userRef.get(), profileRef.get()]);
 
-    const tokens = new Set<string>();
-    const add = (v: unknown) => { if (typeof v === 'string' && v) tokens.add(v); };
+    const tokens = new Set();
+    const add = (v) => { if (typeof v === 'string' && v) tokens.add(v); };
     add(userSnap.get('fcmToken'));
     const list = userSnap.get('fcmTokens');
     if (Array.isArray(list)) list.forEach(add);
@@ -95,15 +95,15 @@ export default async function handler(req: any, res: any) {
     });
 
     // 6. Remove tokens that are no longer valid, from both places.
-    const dead = new Set<string>();
+    const dead = new Set();
     result.responses.forEach((r, i) => {
-      const code = r.error?.code || '';
+      const code = (r.error && r.error.code) || '';
       if (!r.success && (code.includes('registration-token-not-registered') || code.includes('invalid-registration-token'))) {
         dead.add(all[i]);
       }
     });
     if (dead.size) {
-      const userFix: Record<string, unknown> = {};
+      const userFix = {};
       if (dead.has(userSnap.get('fcmToken'))) userFix.fcmToken = FieldValue.delete();
       if (Array.isArray(list)) userFix.fcmTokens = FieldValue.arrayRemove(...dead);
       if (Object.keys(userFix).length) await userRef.update(userFix);
@@ -112,8 +112,8 @@ export default async function handler(req: any, res: any) {
 
     if (result.successCount > 0) await orderRef.update({ sellerPushSentAt: FieldValue.serverTimestamp() });
     return res.status(200).json({ ok: true, sent: result.successCount, failed: result.failureCount });
-  } catch (e: any) {
+  } catch (e) {
     console.error('notify-order error', e);
     return res.status(500).json({ error: 'Server error' });
   }
-}
+};
