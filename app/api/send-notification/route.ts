@@ -4,18 +4,34 @@ import admin from 'firebase-admin';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const ALLOWED_ORIGINS = [
+const EXACT_ORIGINS = [
   'https://studio-wheat-tau.vercel.app',
   'https://studio-git-main-marvineinstein-marsas-projects.vercel.app',
 ];
+// Your Vercel preview addresses look like studio-<hash>-marvineinstein-marsas-projects.vercel.app
+const PREVIEW_SUFFIX = '-marvineinstein-marsas-projects.vercel.app';
 
-function corsHeaders(origin: string | null) {
-  const allowed = origin && ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
-  return {
-    'Access-Control-Allow-Origin': allowed,
+function isAllowedOrigin(origin: string | null): origin is string {
+  if (!origin) return false;
+  if (EXACT_ORIGINS.includes(origin)) return true;
+  const extra = (process.env.EXTRA_ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (extra.includes(origin)) return true;
+  try {
+    const u = new URL(origin);
+    if (u.hostname === 'localhost') return true;
+    if (u.protocol === 'https:' && u.hostname.startsWith('studio-') && u.hostname.endsWith(PREVIEW_SUFFIX)) return true;
+  } catch {}
+  return false;
+}
+
+function corsHeaders(origin: string | null): Record<string, string> {
+  const h: Record<string, string> = {
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    Vary: 'Origin',
   };
+  if (isAllowedOrigin(origin)) h['Access-Control-Allow-Origin'] = origin;
+  return h;
 }
 
 // Firebase starts only when a request arrives, so the build never touches the credentials.
@@ -46,6 +62,7 @@ function tooMany(uid: string) {
 }
 
 const clip = (v: unknown, n: number) => String(v == null ? '' : v).slice(0, n);
+const validToken = (t: unknown): t is string => typeof t === 'string' && t.length > 20 && t.length < 4096;
 
 export async function OPTIONS(req: NextRequest) {
   return new NextResponse(null, { status: 204, headers: corsHeaders(req.headers.get('origin')) });
@@ -62,6 +79,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const fb = getAdmin();
+    const db = fb.firestore();
 
     // 1. Only signed-in users (not guests) can send.
     const authHeader = req.headers.get('authorization') || '';
@@ -73,20 +91,54 @@ export async function POST(req: NextRequest) {
 
     // 2. Check and clean the request.
     const body = await req.json().catch(() => ({} as any));
-    const rawTokens: unknown[] = Array.isArray(body?.tokens) ? body.tokens : [];
-    const tokens = Array.from(
-      new Set<string>(
-        rawTokens.filter((t): t is string => typeof t === 'string' && t.length > 20 && t.length < 4096)
-      )
-    ).slice(0, 10);
-    if (tokens.length === 0) return NextResponse.json({ success: true, sent: 0 }, { headers });
-
-    const title = clip(body?.title, 80) || 'Smart Kuku';
+    let title = clip(body?.title, 80) || 'Smart Kuku';
     const message = clip(body?.message, 200);
     const rawUrl = typeof body?.url === 'string' ? body.url : '/';
     const url = rawUrl.startsWith('/') && !rawUrl.startsWith('//') ? rawUrl.slice(0, 300) : '/';
 
-    // 3. Send as a data message: the app's service worker shows it with the Smart Kuku name and icon.
+    // 3. Work out who to notify.
+    const tokenOwner = new Map<string, string>(); // token -> owner uid (chat mode only, used for cleanup)
+    let tokens: string[] = [];
+
+    const conversationId = typeof body?.conversationId === 'string' ? body.conversationId : '';
+    if (conversationId) {
+      // Chat mode: the server finds the other person and all of their devices.
+      if (!/^[^/]{1,300}$/.test(conversationId)) return fail(400, 'Bad conversation');
+      const convSnap = await db.collection('conversations').doc(conversationId).get();
+      const participants: string[] = Array.isArray(convSnap.data()?.participants) ? convSnap.data()!.participants : [];
+      if (!convSnap.exists || !participants.includes(decoded.uid)) return fail(403, 'Not in this chat');
+
+      // Use the sender's current profile name when there is one.
+      const senderProfile = await db.collection('public_profiles').doc(decoded.uid).get();
+      const senderName = clip(senderProfile.data()?.name, 80).trim();
+      if (senderName) title = senderName;
+
+      for (const uid of participants.filter((p) => p !== decoded.uid)) {
+        const [uSnap, pSnap] = await Promise.all([
+          db.collection('users').doc(uid).get(),
+          db.collection('public_profiles').doc(uid).get(),
+        ]);
+        const u = uSnap.data() || {};
+        // Respect the receiver's Notification Preferences
+        if (u.notificationPrefs && u.notificationPrefs.messages === false) continue;
+
+        const list: unknown[] = [];
+        if (Array.isArray(u.fcmTokens)) list.push(...u.fcmTokens);
+        list.push(pSnap.data()?.fcmToken);
+        for (const t of list) {
+          if (validToken(t) && !tokenOwner.has(t)) tokenOwner.set(t, uid);
+        }
+      }
+      tokens = Array.from(tokenOwner.keys()).slice(0, 10);
+    } else {
+      // Old mode (post notifications): the caller supplies the tokens.
+      const rawTokens: unknown[] = Array.isArray(body?.tokens) ? body.tokens : [];
+      tokens = Array.from(new Set<string>(rawTokens.filter(validToken))).slice(0, 10);
+    }
+
+    if (tokens.length === 0) return NextResponse.json({ success: true, sent: 0 }, { headers });
+
+    // 4. Send as a data message: the app's service worker shows it with the Smart Kuku name and icon.
     const response = await fb.messaging().sendEachForMulticast({
       tokens,
       data: {
@@ -99,6 +151,27 @@ export async function POST(req: NextRequest) {
       webpush: { headers: { Urgency: 'high', TTL: '86400' } },
       android: { priority: 'high' },
     });
+
+    // 5. Remove tokens that are dead, so old devices stop failing silently.
+    if (tokenOwner.size > 0) {
+      const cleanup: Promise<unknown>[] = [];
+      response.responses.forEach((r, i) => {
+        const code = r.error?.code;
+        if (r.success || (code !== 'messaging/registration-token-not-registered' && code !== 'messaging/invalid-registration-token')) return;
+        const token = tokens[i];
+        const uid = tokenOwner.get(token);
+        if (!uid) return;
+        cleanup.push(
+          db.collection('users').doc(uid).update({ fcmTokens: admin.firestore.FieldValue.arrayRemove(token) }).catch(() => {})
+        );
+        cleanup.push(
+          db.collection('public_profiles').doc(uid).get().then((s) => {
+            if (s.data()?.fcmToken === token) return s.ref.update({ fcmToken: admin.firestore.FieldValue.delete() });
+          }).catch(() => {})
+        );
+      });
+      await Promise.all(cleanup);
+    }
 
     return NextResponse.json(
       { success: true, sent: response.successCount, failed: response.failureCount },
